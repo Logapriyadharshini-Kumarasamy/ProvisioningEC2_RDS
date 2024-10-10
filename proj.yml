@@ -1,0 +1,131 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Setting up VPC with public subnet, route table, internet gateway, security group, and EC2 instance"
+
+Resources:
+  myVPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: "10.0.0.0/24"
+      Tags:
+        - Key: Name
+          Value: myVPC
+
+  myPublicSubnet:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref myVPC
+      CidrBlock: "10.0.0.0/25"  # Adjust CIDR block to fit within VPC CIDR block
+      AvailabilityZone: !Select [0, !GetAZs '']  # Optional, specifies an AZ
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: myPublicSubnet
+
+  myRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref myVPC
+      Tags:
+        - Key: Name
+          Value: myRouteTable
+
+  myIG:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: myIG
+
+  IGAttach:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      VpcId: !Ref myVPC
+      InternetGatewayId: !Ref myIG
+
+  myRoute:
+    Type: "AWS::EC2::Route"
+    Properties:
+      RouteTableId: !Ref myRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref myIG
+
+  mySubnetRouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref myPublicSubnet
+      RouteTableId: !Ref myRouteTable
+
+  MySecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Enable SSH and HTTP access"
+      VpcId: !Ref myVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+
+  myEC2:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: "ami-0ba9883b710b05ac6"  # Ensure this AMI ID is valid in your region
+      InstanceType: "t2.micro"
+      SubnetId: !Ref myPublicSubnet
+      SecurityGroupIds:
+        - !Ref MySecurityGroup
+      UserData: !Base64 |
+        #!/bin/bash
+        # Install the CloudWatch Agent
+        sudo yum install -y amazon-cloudwatch-agent
+
+        # Create CloudWatch Agent configuration file
+        sudo tee /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json > /dev/null <<EOL
+        {
+          "agent": {
+            "metrics_collection_interval": 60,
+            "run_as_user": "root"
+          },
+          "metrics": {
+            "namespace": "MyAppNamespace",
+            "metrics_collected": {
+              "cpu": {
+                "measurement": [
+                  "cpu_usage_idle",
+                  "cpu_usage_iowait"
+                ],
+                "metrics_collection_interval": 60
+              }              
+            }
+          }
+        }
+        EOL
+
+        # Ensure correct permissions for the configuration directory
+        sudo chmod 755 /opt/aws/amazon-cloudwatch-agent/etc/
+        sudo chown root:root /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
+        # Start the CloudWatch Agent
+        sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+
+        # Verify the agent status
+        sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a status
+
+        # Completion message
+        echo "CloudWatch Agent installation and configuration completed"
+
+Outputs:
+  VPCID:
+    Value: !Ref myVPC
+    Description: "VPC ID of the created resource"
+  SubnetID:
+    Value: !Ref myPublicSubnet
+    Description: "Subnet ID of the created resource"
+  InstanceID:
+    Value: !Ref myEC2
+    Description: "Instance ID of the created EC2 instance"
+
